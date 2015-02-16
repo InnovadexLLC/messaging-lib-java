@@ -42,3 +42,9 @@ build/docs/javadoc/package-list
 *.xml
 
 gradlew
+
+.classpath
+
+.project
+
+*.prefs
