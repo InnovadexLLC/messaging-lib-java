@@ -1,0 +1,150 @@
+apply plugin: 'java'
+apply plugin: 'eclipse'
+apply plugin: 'maven'
+apply plugin: 'signing'
+
+
+def versionN ="";
+if (project.hasProperty("VERSION")) {  
+    versionN = "$VERSION"
+} else {
+    versionN = '0.0.0'
+}
+
+sourceCompatibility = 1.7
+version = "$versionN"
+group = 'com.sciul'
+buildscript {
+    repositories {
+        jcenter()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'org.gradle.api.plugins:gradle-tomcat-plugin:1.2.3'
+        classpath "com.kenshoo:gradle-fpm:0.4"
+    }
+}
+repositories {
+    jcenter()
+    mavenCentral()
+
+      maven {
+       url "http://repo.spring.io/libs-snapshot"
+    }
+    maven {
+       url "http://eaio.com/maven2"
+    }
+    maven {
+       url "https://oss.sonatype.org/content/groups/public"
+    }
+    maven {
+       url "https://nexus.sciul.com/nexus/content/groups/public"
+    }
+}
+
+buildscript {
+   repositories {
+      mavenCentral()
+   }
+   dependencies {
+      classpath 'com.github.townsfolk:gradle-release:1.2'
+   }
+}
+apply plugin: 'release'
+
+dependencies {
+    compile 'com.fasterxml.jackson.core:jackson-databind:2.5.1'
+    compile 'cglib:cglib:3.0'
+    compile 'com.github.ddth:ddth-kafka:1.0.3'
+	compile 'org.apache.commons:commons-pool2:2.3'
+	compile 'javax.json:javax.json-api:1.0'	
+}
+
+task javadocJar (type: Jar, dependsOn: javadoc) { // (1)
+    classifier = 'javadoc'
+    from javadoc.destinationDir
+}
+
+task sourceJar (type : Jar) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+ext {
+    pomFilePath = "${project.projectDir}/tmp/pom.xml"
+    pomFile = file(pomFilePath)
+}
+
+configurations {
+    pom
+}
+
+artifacts {
+    archives jar
+    archives sourceJar
+    archives javadocJar
+    if (pomFile.exists()) {
+        pom pomFile
+    }
+}
+
+task signJars (type : Sign, dependsOn: [jar, javadocJar, sourceJar]) {
+    sign configurations.archives
+}
+
+task signPom(type: Sign) {
+    sign configurations.pom
+}
+
+if (project.ext.pomFile.exists()) {
+    task preparePublication (dependsOn : [signJars, signPom])
+} else {
+    task preparePublication (dependsOn : signJars)
+}
+
+def getSignatureFiles = {
+    def allFiles = project.tasks.signJars.signatureFiles.collect { it }
+    def signedSources = allFiles.find { it.name.contains('-sources') }
+    def signedJavadoc = allFiles.find { it.name.contains('-javadoc') }
+    def signedJar = (allFiles - [signedSources, signedJavadoc])[0]
+    return [
+            [archive: signedSources, classifier: 'sources', extension: 'jar.asc'],
+            [archive: signedJavadoc, classifier: 'javadoc', extension: 'jar.asc'],
+            [archive: signedJar,     classifier: null,      extension: 'jar.asc']
+    ]
+}
+
+def getPomSignature = {
+    return project.tasks.signPom.signatureFiles.collect{it}[0]
+}
+
+jar.doFirst{
+     sourceSets.main.java.srcDirs.each {
+        from it
+     }
+}
+
+jar {
+    manifest {
+        attributes 'messaging-lib-java': 'Library Classes to build kafka Java app.', 'Implementation-Version': version
+    }
+}
+
+test {
+    systemProperties 'property': 'value'
+}
+
+
+
+uploadArchives {
+	repositories {
+        mavenDeployer {
+            repository(url: "${nexusUrl}/content/repositories/releases") {
+                authentication(userName: nexusUsername, password: nexusPassword)
+            }
+            snapshotRepository(url: "${nexusUrl}/content/repositories/snapshots") {
+                authentication(userName: nexusUsername, password: nexusPassword)
+            }
+        }
+    }
+}

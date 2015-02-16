@@ -10,3 +10,35 @@
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
+
+.gradle/2.0/taskArtifacts/cache.properties
+
+.gradle/2.0/taskArtifacts/cache.properties.lock
+
+.gradle/2.0/taskArtifacts/fileSnapshots.bin
+
+*.bin
+
+abc.build.gradle
+
+abc.settings.gradle
+
+*.html
+
+build/docs/javadoc/package-list
+
+*.js
+
+*.css
+
+*.MF
+
+*.options
+
+*.properties
+
+*.bat
+
+*.xml
+
+gradlew
