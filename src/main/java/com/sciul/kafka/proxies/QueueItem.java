@@ -9,6 +9,7 @@ import javax.json.*;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -121,6 +122,10 @@ public class QueueItem {
 	public static <T> QueueItem build(ObjectMapper objectMapper,
                                     Map<String, String> headers,
                                     Class<T> clazz, T pojo) throws IOException {
+    if (headers == null) {
+      headers = Collections.emptyMap();
+    }
+
     return build(Json
         .createObjectBuilder()
         .add(PAYLOAD, Json
