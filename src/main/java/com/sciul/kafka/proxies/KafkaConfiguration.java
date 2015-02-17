@@ -59,18 +59,18 @@ public class KafkaConfiguration {
 
 	private final static ObjectMapper mapper = new ObjectMapper();
 
-	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId) {
+	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId) throws Exception {
     this(zookeeperConnString, consumerGroupId, null, true);
 	}
 
 	@SuppressWarnings("rawtypes")
-	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId, Map<String, QueueConsumer> listenerMap) {
+	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId, Map<String, QueueConsumer> listenerMap) throws Exception {
     this(zookeeperConnString, consumerGroupId, listenerMap, true);
 	}
 
 	@SuppressWarnings("rawtypes")
 	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId,
-			Map<String, QueueConsumer> listenerMap, boolean consumeFromBeginning) {
+			Map<String, QueueConsumer> listenerMap, boolean consumeFromBeginning) throws Exception {
 		this.zookeeperConnString = zookeeperConnString;
 		this.consumerGroupId = consumerGroupId;
 		this.listenerMap = listenerMap;
@@ -78,7 +78,7 @@ public class KafkaConfiguration {
 		init();
 	}
 
-	private void init() {
+	private void init() throws Exception {
 		curatorFramework = curatorFramework();
 		delayQ = distributedDelayQueue();
     kafkaClient = new KafkaClient(zookeeperConnString);
@@ -97,13 +97,19 @@ public class KafkaConfiguration {
 		return curatorFramework;
 	}
 
-	public DistributedDelayQueue<String> distributedDelayQueue() {
+	public DistributedDelayQueue<String> distributedDelayQueue() throws Exception {
 		org.apache.curator.framework.recipes.queue.QueueConsumer<String> consumer = new org.apache.curator.framework.recipes.queue.QueueConsumer<String>() {
 			@Override
 			public void consumeMessage(String message) throws Exception {
+        logger.debug("message received from delayQ: {}", message);
         JsonObject jsonObject = Json.createReader(new StringReader(message)).readObject();
-        String queue = jsonObject.getString(QUEUE);
-        String queueMessage = jsonObject.getJsonObject(PAYLOAD).toString();
+        String queue = jsonObject
+            .getJsonObject(PAYLOAD)
+            .getString(QUEUE);
+        String queueMessage = jsonObject
+            .getJsonObject(PAYLOAD)
+            .getJsonObject(PAYLOAD)
+            .toString();
 				kafkaClient.sendMessage(new KafkaMessage(queue, queueMessage));
 			}
 
@@ -130,6 +136,7 @@ public class KafkaConfiguration {
 		QueueBuilder<String> builder = QueueBuilder.builder(curatorFramework, consumer, serializer, DELAY_Q_PATH);
 
 		delayQ = builder.buildDelayQueue();
+    delayQ.start();
 
 		return delayQ;
 	}
@@ -155,9 +162,12 @@ public class KafkaConfiguration {
         .setJsonObject(Json
             .createObjectBuilder()
             .add(QUEUE, queueConsumer.queue())
-            .add(PAYLOAD, inner.toString())
+            .add(PAYLOAD, Json
+                .createReader(new StringReader(inner.toString()))
+                .read())
             .build());
 
+    logger.debug("queuing delayQ message: {}", outer);
 		delayQ.put(outer.toString(), timeSinceEpoch);
 	}
 

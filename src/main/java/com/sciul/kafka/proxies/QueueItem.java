@@ -25,7 +25,7 @@ public class QueueItem {
   private Integer tryNumber = 0;
   private String className;
   private JsonObject jsonObject;
-  private Map<String, String> headers;
+  private Map<String, String> headers = Collections.EMPTY_MAP;
 
   public Map<String, String> getHeaders() {
     return headers;
@@ -123,7 +123,7 @@ public class QueueItem {
                                     Map<String, String> headers,
                                     Class<T> clazz, T pojo) throws IOException {
     if (headers == null) {
-      headers = Collections.emptyMap();
+      headers = Collections.EMPTY_MAP;
     }
 
     return build(Json
