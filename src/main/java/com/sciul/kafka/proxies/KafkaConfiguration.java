@@ -1,11 +1,15 @@
 package com.sciul.kafka.proxies;
 
+import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.util.Map;
 import java.util.Set;
 
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import com.fasterxml.jackson.databind.type.TypeFactory;
+import com.github.ddth.kafka.IKafkaMessageListener;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -16,13 +20,13 @@ import org.apache.curator.framework.state.ConnectionState;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 
-import com.github.ddth.kafka.IKafkaMessageListener;
 import com.github.ddth.kafka.KafkaClient;
 import com.github.ddth.kafka.KafkaMessage;
+import org.slf4j.MDC;
 
 import javax.json.Json;
+import javax.json.JsonObject;
 
 /**
  * @author GauravChawla
@@ -44,69 +48,49 @@ public class KafkaConfiguration {
 	};
 
 	private String zookeeperConnString;
-
 	private String consumerGroupId;
-
-	private boolean kafkaTurnedOff;
-
-	private boolean consumeFromBegining = false;
-
+	private boolean consumeFromBeginning = false;
 	private KafkaClient kafkaClient;
-
 	private CuratorFramework curatorFramework;
-
 	private DistributedDelayQueue<String> delayQ;
 
 	@SuppressWarnings("rawtypes")
 	private Map<String, QueueConsumer> listenerMap;
 
-	private static ObjectMapper mapper = new ObjectMapper();
-
-	public KafkaConfiguration() {
-	}
-
-	public KafkaConfiguration(Boolean kafkaTurnedOff) {
-		this.kafkaTurnedOff = kafkaTurnedOff;
-		init();
-	}
+	private final static ObjectMapper mapper = new ObjectMapper();
 
 	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId) {
-		this.zookeeperConnString = zookeeperConnString;
-		this.consumerGroupId = consumerGroupId;
-		init();
+    this(zookeeperConnString, consumerGroupId, null, true);
 	}
 
 	@SuppressWarnings("rawtypes")
 	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId, Map<String, QueueConsumer> listenerMap) {
-		this.zookeeperConnString = zookeeperConnString;
-		this.consumerGroupId = consumerGroupId;
-		this.listenerMap = listenerMap;
-		init();
+    this(zookeeperConnString, consumerGroupId, listenerMap, true);
 	}
 
 	@SuppressWarnings("rawtypes")
 	public KafkaConfiguration(String zookeeperConnString, String consumerGroupId,
-			Map<String, QueueConsumer> listenerMap, boolean consumeFromBegining) {
+			Map<String, QueueConsumer> listenerMap, boolean consumeFromBeginning) {
 		this.zookeeperConnString = zookeeperConnString;
 		this.consumerGroupId = consumerGroupId;
 		this.listenerMap = listenerMap;
-		this.consumeFromBegining = consumeFromBegining;
+		this.consumeFromBeginning = consumeFromBeginning;
 		init();
 	}
 
 	private void init() {
 		curatorFramework = curatorFramework();
 		delayQ = distributedDelayQueue();
-		kafkaClient = kafkaClient();
-		// startListeners();
+    kafkaClient = new KafkaClient(zookeeperConnString);
+    try {
+      kafkaClient.init();
+      logger.debug("connected to kafka!!");
+    } catch (Exception e) {
+      logger.warn("unable to instantiate kafkaClient!", e);
+    }
 	}
 
 	public CuratorFramework curatorFramework() {
-		if (kafkaTurnedOff) {
-			curatorFramework = null;
-			return curatorFramework;
-		}
-
 		RetryPolicy retryPolicy = new ExponentialBackoffRetry(BASE_SLEEP_TIME_MS, MAX_RETRIES);
 		curatorFramework = CuratorFrameworkFactory.newClient(zookeeperConnString, retryPolicy);
 		curatorFramework.start();
@@ -114,14 +98,13 @@ public class KafkaConfiguration {
 	}
 
 	public DistributedDelayQueue<String> distributedDelayQueue() {
-		if (kafkaTurnedOff) {
-			return null;
-		}
-
 		org.apache.curator.framework.recipes.queue.QueueConsumer<String> consumer = new org.apache.curator.framework.recipes.queue.QueueConsumer<String>() {
 			@Override
 			public void consumeMessage(String message) throws Exception {
-				kafkaClient.sendMessage(new KafkaMessage(QUEUE.toString(), message));
+        JsonObject jsonObject = Json.createReader(new StringReader(message)).readObject();
+        String queue = jsonObject.getString(QUEUE);
+        String queueMessage = jsonObject.getJsonObject(PAYLOAD).toString();
+				kafkaClient.sendMessage(new KafkaMessage(queue, queueMessage));
 			}
 
 			@Override
@@ -151,76 +134,64 @@ public class KafkaConfiguration {
 		return delayQ;
 	}
 
-	public KafkaClient kafkaClient() {
-		if (kafkaTurnedOff) {
-			logger.debug("kafka is turned off");
-			return new KafkaClient();
-		}
+	public <K> void publish(QueueConsumer<K> queueConsumer, Map<String, String> headers,
+                          Class<K> clazz, K pojo) throws Exception {
+    QueueItem queueItem = QueueItem.build(mapper, headers, clazz, pojo);
 
-		kafkaClient = new KafkaClient(zookeeperConnString);
-		try {
-			kafkaClient.init();
-			logger.debug("connected to kafka!!");
-		} catch (Exception e) {
-			logger.warn("unable to instantiate kafkaClient!");
-		}
-
-		return kafkaClient;
+    String queue = queueConsumer.queue();
+		logger.debug("queue: {}, message: {}", queue, queueItem);
+		kafkaClient.sendMessage(new KafkaMessage(queue, queueItem.toString()));
 	}
 
-	public KafkaClient client() {
-		return kafkaClient;
+	public <K> void publish(QueueConsumer<K> queueConsumer, Map<String, String> headers,
+                          Class<K> clazz, K pojo, long timeSinceEpoch) throws Exception {
+		QueueItem inner = QueueItem.build(mapper, headers, clazz, pojo);
+
+    QueueItem outer = new QueueItem();
+    outer.setClassName(this.getClass().getCanonicalName());
+    outer.setTryNumber(0);
+
+		outer
+        .setJsonObject(Json
+            .createObjectBuilder()
+            .add(QUEUE, queueConsumer.queue())
+            .add(PAYLOAD, inner.toString())
+            .build());
+
+		delayQ.put(outer.toString(), timeSinceEpoch);
 	}
 
-	public String startListeners() {
-		if (kafkaTurnedOff) {
-			return "Kafka not started";
-		}
+  public void startListeners() {
+    if (listenerMap == null) {
+      logger.warn("no listeners started!");
+      return;
+    }
 
-		Set<String> queues = listenerMap.keySet();
+    for (final Map.Entry<String, QueueConsumer> listener : listenerMap.entrySet()) {
+      logger.info("starting listener for: {}", listener.getKey());
 
-		for (final String queue : queues) {
-			kafkaClient.addMessageListener(consumerGroupId, consumeFromBegining, queue, new IKafkaMessageListener() {
-				@Override
-				public void onMessage(KafkaMessage message) {
-					MDC.put("Service", queue);
+      kafkaClient.addMessageListener(consumerGroupId, consumeFromBeginning, listener.getKey(), new IKafkaMessageListener() {
 
-					logger.debug("*************************************");
-					ASYNC_CALL.set(true);
-					try {
-						logger.debug("message: {}", message.contentAsString());
-						listenerMap.get(queue).consume(message.contentAsString());
-					} catch (Exception e) {
-						logger.error("unknown exception while processing queue: " + queue, e);
-					}
-					ASYNC_CALL.set(false);
-					logger.debug("*************************************");
-				}
-			});
-		}
+        @SuppressWarnings("unchecked")
+        @Override
+        public void onMessage(KafkaMessage message) {
+          MDC.put("Service", listener.getValue().getClass().getCanonicalName());
 
-		return "Started";
-	}
+          logger.debug("*************************************");
+          ASYNC_CALL.set(true);
+          try {
+            logger.debug("message: {}", message.contentAsString());
 
-	public <T, K> void publish(QueueConsumer<T> queueConsumer, K pojo) throws Exception {
-		if (kafkaTurnedOff) {
-			return;
-		}
-		String queue = queueConsumer.queue();
-		logger.debug("queue: {}, message: {}", queue, mapper.writeValueAsString(pojo));
-		kafkaClient.sendMessage(new KafkaMessage(queue, mapper.writeValueAsString(pojo)));
-	}
+            QueueItem queueItem = QueueItem.build(message.contentAsString());
 
-	public <T, K> void publish(QueueConsumer<T> queueConsumer, K pojo, long timeSinceEpoch) throws Exception {
-		if (kafkaTurnedOff) {
-			return;
-		}
-
-		QueueItem queueItem = QueueItem.build(mapper, pojo);
-
-		queueItem.setJsonObject(Json.createObjectBuilder().add(QUEUE, queueConsumer.queue())
-				.add(PAYLOAD, queueItem.getJsonObject()).build());
-
-		delayQ.put(queueItem.toString(), timeSinceEpoch);
-	}
+            listener.getValue().consume(queueItem.getHeaders(), queueItem.payload(mapper));
+          } catch (Exception e) {
+            logger.error("exception while processing queue: " + listener, e);
+          }
+          ASYNC_CALL.set(false);
+          logger.debug("*************************************");
+        }
+      });
+    }
+  }
 }

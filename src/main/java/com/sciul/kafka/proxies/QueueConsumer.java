@@ -1,9 +1,11 @@
 package com.sciul.kafka.proxies;
 
+import java.util.Map;
+
 /**
  * @author GauravChawla
  */
 public interface QueueConsumer<T> {
-	<K> void consume(String message);
+	void consume(Map<String, String> headers, T pojo);
 	String queue();
 }
