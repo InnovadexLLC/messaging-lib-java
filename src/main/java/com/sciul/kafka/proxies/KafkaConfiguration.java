@@ -2,6 +2,7 @@ package com.sciul.kafka.proxies;
 
 import java.io.StringReader;
 import java.nio.charset.Charset;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -170,6 +171,20 @@ public class KafkaConfiguration {
     KafkaMessage msg = kafkaClient.consumeMessage(consumerGroupId, consumeFromBeginning, topic, 3, TimeUnit.SECONDS);
     if (msg != null)
       return msg.contentAsString();
+    return null;
+  }
+
+  public Map<String, Object> consumeMessage(String topic, String consumerGroupId, boolean consumeFromBeginning)
+        throws Exception {
+    Map<String, Object> message = new HashMap<String, Object>();
+    QueueItem queueItem = null;
+    KafkaMessage msg = kafkaClient.consumeMessage(consumerGroupId, consumeFromBeginning, topic, 3, TimeUnit.SECONDS);
+    if (msg != null) {
+      queueItem = QueueItem.build(msg.contentAsString());
+      message.put("headers", queueItem.getHeaders());
+      message.put("payload", queueItem.payload(mapper));
+      return message;
+    }
     return null;
   }
 
