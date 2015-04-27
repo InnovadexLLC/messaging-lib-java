@@ -1,5 +1,6 @@
 package com.sciul.kafka.proxies;
 
+import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.util.HashMap;
@@ -9,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import javax.json.Json;
 import javax.json.JsonObject;
 
+import com.sciul.kafka.exception.KafkaException;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -81,7 +83,7 @@ public class KafkaConfiguration {
     return kafkaClient;
   }
 
-  private void init() throws Exception {
+  private void init() throws KafkaException {
     curatorFramework = curatorFramework();
     delayQ = distributedDelayQueue();
     kafkaClient = new KafkaClient(zookeeperConnString);
@@ -90,6 +92,7 @@ public class KafkaConfiguration {
       logger.debug("connected to kafka!!");
     } catch (Exception e) {
       logger.warn("unable to instantiate kafkaClient!", e);
+      throw new KafkaException("unable to instantiate kafkaClient!", e);
     }
   }
 
@@ -100,11 +103,11 @@ public class KafkaConfiguration {
     return curatorFramework;
   }
 
-  public DistributedDelayQueue<String> distributedDelayQueue() throws Exception {
+  public DistributedDelayQueue<String> distributedDelayQueue() throws KafkaException {
     org.apache.curator.framework.recipes.queue.QueueConsumer<String> consumer =
           new org.apache.curator.framework.recipes.queue.QueueConsumer<String>() {
             @Override
-            public void consumeMessage(String message) throws Exception {
+            public void consumeMessage(String message) {
               logger.debug("message received from delayQ: {}", message);
               JsonObject jsonObject = Json.createReader(new StringReader(message)).readObject();
               String queue = jsonObject.getJsonObject(PAYLOAD).getString(QUEUE);
@@ -135,14 +138,24 @@ public class KafkaConfiguration {
     QueueBuilder<String> builder = QueueBuilder.builder(curatorFramework, consumer, serializer, DELAY_Q_PATH);
 
     delayQ = builder.buildDelayQueue();
-    delayQ.start();
+    try {
+      delayQ.start();
+    } catch (Exception e) {
+      logger.error("unable to start delayQ", e);
+      throw new KafkaException("unable to start delayQ", e);
+    }
 
     return delayQ;
   }
 
-  public <K> void publish(QueueConsumer<K> queueConsumer, Map<String, String> headers, Class<K> clazz, K pojo)
-        throws Exception {
-    QueueItem queueItem = QueueItem.build(mapper, headers, clazz, pojo);
+  public <K> void publish(QueueConsumer<K> queueConsumer, Map<String, String> headers, Class<K> clazz, K pojo) throws KafkaException {
+    QueueItem queueItem = null;
+    try {
+      queueItem = QueueItem.build(mapper, headers, clazz, pojo);
+    } catch (IOException e) {
+      logger.error("Unable to map/ build queueItem", e);
+      throw new KafkaException("Unable to map/ build queueItem", e);
+    }
 
     String queue = queueConsumer.queue();
     logger.debug("queue: {}, message: {}", queue, queueItem);
@@ -153,8 +166,14 @@ public class KafkaConfiguration {
         Map<String, String> headers,
         Class<K> clazz,
         K pojo,
-        long timeSinceEpoch) throws Exception {
-    QueueItem inner = QueueItem.build(mapper, headers, clazz, pojo);
+        long timeSinceEpoch) throws KafkaException {
+    QueueItem inner = null;
+    try {
+      inner = QueueItem.build(mapper, headers, clazz, pojo);
+    } catch (IOException e) {
+      logger.error("Unable to map/ build queueItem", e);
+      throw new KafkaException("Unable to map/ build queueItem", e);
+    }
 
     QueueItem outer = new QueueItem();
     outer.setClassName(this.getClass().getCanonicalName());
@@ -164,7 +183,12 @@ public class KafkaConfiguration {
           .add(PAYLOAD, Json.createReader(new StringReader(inner.toString())).read()).build());
 
     logger.debug("queuing delayQ message: {}", outer);
-    delayQ.put(outer.toString(), timeSinceEpoch);
+    try {
+      delayQ.put(outer.toString(), timeSinceEpoch);
+    } catch (Exception e) {
+      logger.error("Unable to set timer for delayQ", e);
+      throw new KafkaException("Unable to set timer for delayQ", e);
+    }
   }
 
   public String consumeMessage(String topic) throws InterruptedException {
@@ -174,15 +198,29 @@ public class KafkaConfiguration {
     return null;
   }
 
-  public Map<String, Object> consumeMessage(String topic, String consumerGroupId, boolean consumeFromBeginning)
-        throws Exception {
+  public Map<String, Object> consumeMessage(String topic, String consumerGroupId, boolean consumeFromBeginning) throws KafkaException {
     Map<String, Object> message = new HashMap<String, Object>();
     QueueItem queueItem = null;
-    KafkaMessage msg = kafkaClient.consumeMessage(consumerGroupId, consumeFromBeginning, topic, 3, TimeUnit.SECONDS);
+    KafkaMessage msg = null;
+    try {
+      msg = kafkaClient.consumeMessage(consumerGroupId, consumeFromBeginning, topic, 3, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      logger.error("Unable to read from message from kafka", e);
+      throw new KafkaException("Unable to read from message from kafka", e);
+    }
+
     if (msg != null) {
       queueItem = QueueItem.build(msg.contentAsString());
       message.put("headers", queueItem.getHeaders());
-      message.put("payload", queueItem.payload(mapper));
+      try {
+        message.put("payload", queueItem.payload(mapper));
+      } catch (ClassNotFoundException e) {
+        logger.error("Unable to map message from kafka to class", e);
+        throw new KafkaException("Unable to map message from kafka to class", e);
+      } catch (IOException e) {
+        logger.error("Unable to convert json into class instance", e);
+        throw new KafkaException("Unable to convert json into class instance", e);
+      }
       return message;
     }
     return null;
