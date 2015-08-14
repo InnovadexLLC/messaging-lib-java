@@ -38,7 +38,7 @@ repositories {
        url "https://oss.sonatype.org/content/groups/public"
     }
     maven {
-       url "https://nexus.sciul.com/nexus/content/groups/public"
+       url "https://nexus.sciul.com/content/groups/public"
     }
 }
 
